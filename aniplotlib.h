@@ -203,7 +203,8 @@ private:
 	// Return value is a number of gridlines to render. One line off the screen on both ends to be able to render half-visible legend.
 	// If the return value (num_gridlines) is 0, other values are undefined.
 	// min_val is allowed to be larger than max_val and size_pixels is allowed to be negative.
-	int _calculate_gridlines(double min_val, double max_val, double size_pixels, double min_pixels_per_div, double* out_val_begin, double* out_val_end, double* out_val_step);
+	int  _calculate_gridlines_base2(double min_val, double max_val, double size_pixels, double min_pixels_per_div, double* out_val_begin, double* out_val_end, double* out_val_step);
+	void _calculate_gridlines_base10(double min_val, double max_val, double size_pixels, double min_pixels_per_div, double* out_val_begin, double* out_val_end, double* out_val_step, double* out_step_exponent, unsigned char* out_grid_mode);
 	void _render_grid_horlines(const PortalRect& screen_value_portal, GraphVisual& graph_visual, const ImRect& canvas_bb);
 	void _render_grid_horlegend(const PortalRect& screen_value_portal, GraphVisual& graph_visual, const ImRect& canvas_bb);
 	void _render_grid_verlines(const PortalRect& screen_value_portal, GraphVisual& graph_visual, const ImRect& canvas_bb);

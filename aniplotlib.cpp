@@ -20,8 +20,8 @@ GraphVisual::GraphVisual(GraphChannel* _graph_channel, uint32_t flags) {
 	line_color_minmax     = ImColor(200, 150, 150, 100); // TODO: only alpha is used
 	minmax_bgcolor        = ImColor(27, 27, 27);
 	bg_color              = ImColor(0, 0, 0);
-	hor_grid_color        = ImVec4(0.19f, 0.19f, 0.19f, 1.0f);
-	hor_grid_text_color   = ImVec4(1.0f, 1.0f, 1.0f, 0.8f);
+	hor_grid_color        = ImVec4(0.40f, 0.40f, 0.40f, 1.0f); // tens. unused.
+	hor_grid_text_color   = ImVec4(1.0f, 1.0f, 1.0f, 0.8f);    // unused.
 	hor_grid_text_bgcolor = ImVec4(0.2f, 0.2f, 0.2f, 0.8f);
 	ver_grid_color        = ImVec4(0.19f, 0.19f, 0.19f, 1.0f);
 	ver_grid_text_color   = ImVec4(1.0f, 1.0f, 1.0f, 0.8f);
@@ -257,7 +257,7 @@ void GraphWidget::_render_minmax_background(const PortalRect& screen_value_porta
 // Return value is a number of gridlines to render. One line off the screen on both ends to be able to render half-visible legend.
 // If the return value (num_gridlines) is 0, other values are undefined.
 // min_val is allowed to be larger than max_val and size_pixels is allowed to be negative.
-int GraphWidget::_calculate_gridlines(double min_val, double max_val, double size_pixels, double min_pixels_per_div, double* out_val_begin, double* out_val_end, double* out_val_step)
+int GraphWidget::_calculate_gridlines_base2(double min_val, double max_val, double size_pixels, double min_pixels_per_div, double* out_val_begin, double* out_val_end, double* out_val_step)
 {
 	if (fabs(size_pixels) < 1. || fabs(max_val - min_val) < EPSILON) {
 		out_val_step = 0;
@@ -276,59 +276,262 @@ int GraphWidget::_calculate_gridlines(double min_val, double max_val, double siz
 	return (int)round((volt_end - volt_begin) / volt_step) + 1;
 }
 
+// window_min_val    : value on window start pixel.
+// window_max_val    : value on window end pixel.
+// size_pixels       : window size
+// min_pixels_per_div: minimum allowed distance between gridlines.
+//
+// out_val_begin     : value of the first gridline. is outside of min_val, max_val range to enable rendering the partially out of screen label even when the line itself is not visible.
+// out_val_step      : in the direction of min_val to max_val.
+//
+// out_step_exponent : power of ten of the out_val_step. if step is 100, out_power is 2.
+//
+// out_grid_mode     : 1 - tens, fives, ones visible. 2 - tens, fives, twopointfives visible, 3 - tens, fives visible.
+//
+// Returns 0 if step can't be calculated.
+//
+void GraphWidget::_calculate_gridlines_base10(double window_min__val, double window_max__val, double size_pixels, double min_pixels_per_div, double* out_val_begin, double* out_val_end, double* out_val_step, double* out_step_exponent, unsigned char* out_grid_mode)
+{
+	if (fabs(size_pixels) < 1. || fabs(window_max__val - window_min__val) < EPSILON) {
+		out_val_step = 0;
+		return;
+	}
+
+	// using "volt" as a concrete mental shortcut for the value axis. the word "value" has too many meanings.
+	// Have to sort by min/max for the ceil/floor calculations to work.
+	double volts_per_min_div = fabs((window_max__val - window_min__val) / size_pixels * min_pixels_per_div); // volts per minimum allowed distance between gridlines.
+
+	*out_grid_mode = 1;
+	double volt_step_exponent = ceil(log10(volts_per_min_div));
+	double volt_step  = pow(10.f, volt_step_exponent);
+	double volt_begin;
+	double volt_end;
+
+	if (window_min__val < window_max__val) {
+		volt_begin = floor(window_min__val / volt_step) * volt_step;
+		volt_end   = ceil(window_max__val / volt_step) * volt_step;
+	} else {
+		volt_begin = ceil(window_min__val / volt_step) * volt_step;
+		volt_end   = floor(window_max__val / volt_step) * volt_step;
+		volt_step  = -volt_step;
+	}
+
+	if (fabs(volt_step) / volts_per_min_div > 4) {
+		volt_step_exponent -= 1;
+		*out_grid_mode = 2;
+		volt_step /= 4;
+	} else if (fabs(volt_step) / volts_per_min_div > 2) {
+		volt_step_exponent -= 1;
+		*out_grid_mode = 3;
+		volt_step /= 2;
+	}
+
+	*out_step_exponent = volt_step_exponent;
+
+	*out_val_begin = volt_begin;
+	*out_val_end   = volt_end;
+	*out_val_step  = volt_step;
+}
+
+// Return true if remainder < y / 1000
+bool is_divisible(double x, double y) {
+	double epsilon = fabs(y / 100);
+	double remainder = fabs(fmod(x, y));
+	if (remainder < epsilon) return true;
+	if (fabs(y) - remainder < epsilon) return true;
+	return false;
+}
+
 void GraphWidget::_render_grid_horlines(const PortalRect& screen_value_portal, GraphVisual& graph_visual, const ImRect& canvas_bb)
 {
 	// TODO: coordinates are NOT pixelperfect. does canvas_bb wrap pixels, or pixel edges?
 	PortalRect& bb_valuespace = graph_visual.portal;
 
 	// using "volt" as a concrete mental shortcut for the value axis. the word "value" has too many meanings.
-	double volt_begin, volt_end, volt_step;
-	int num_gridlines = _calculate_gridlines(bb_valuespace.min.y, bb_valuespace.max.y, canvas_bb.GetHeight(), graph_visual.grid_min_div_horizontal_pix, &volt_begin, &volt_end, &volt_step);
-	if (volt_step == 0 || volt_end <= volt_begin)
+	double volt_begin, volt_end, volt_step, volt_step_exponent;
+	unsigned char grid_mode;
+	_calculate_gridlines_base10(bb_valuespace.min.y, bb_valuespace.max.y, canvas_bb.GetHeight(), graph_visual.grid_min_div_horizontal_pix, &volt_begin, &volt_end, &volt_step, &volt_step_exponent, &grid_mode);
+	if (volt_step == 0)
 		return;
 
-	double pixel_y_begin   = screen_value_portal.proj_vout(ImVec2d(0., volt_begin)).y;
-	double pixels_per_volt = screen_value_portal.proj_vout(ImVec2d(0., 1.)).y - screen_value_portal.proj_vout(ImVec2d(0., 0.)).y;
-	double pixel_y_step    = pixels_per_volt * volt_step;
-	//SDL_Log("num_gridlines %d pixels_per_volt %.5f pixel_y_begin %.5f pixel_y_step %.5f\n", num_gridlines, pixels_per_volt, pixel_y_begin, pixel_y_step);
+	ImVec4 hor_tens_grid_color;
+	ImVec4 hor_fives_grid_color;
+	ImVec4 hor_twopointfives_grid_color;
+	ImVec4 hor_ones_grid_color;
+
+	float col1 = 0.13f;
+	float col2 = 0.22f;
+	float col3 = 0.26f;
+	float col4 = 0.33f;
+	float col5 = 0.44f;
+	ImVec4 color1(col1, col1, col1, 1.0f);
+	ImVec4 color2(col2, col2, col2, 1.0f);
+	ImVec4 color3(col3, col3, col3, 1.0f);
+	ImVec4 color4(col4, col4, col4, 1.0f);
+	ImVec4 color5(col5, col5, col5, 1.0f);
+
+	// Select color-scheme according to grid mode.
+	if (grid_mode == 1) {
+
+		// Full grid, with tens, fives and ones visible.
+		hor_tens_grid_color = color5;
+		hor_fives_grid_color = color4;
+		hor_twopointfives_grid_color = color1;
+		hor_ones_grid_color = color1;
+
+	} else if (grid_mode == 2) {
+
+		// Grid with tens, fives, twopointfives visible.
+		hor_tens_grid_color = color4;
+		hor_fives_grid_color = color3;
+		hor_twopointfives_grid_color = color1;
+		hor_ones_grid_color = color1;
+
+	} else if (grid_mode == 3) {
+
+		// Grid with tens, fives.
+		hor_tens_grid_color = color2;
+		hor_fives_grid_color = color1;
+		hor_twopointfives_grid_color = color1;
+		hor_ones_grid_color = color1;
+	}
+
+	int i = 0;
+	int steps = round((volt_end - volt_begin) / volt_step);
+	double gridpow1 = pow(10.f, volt_step_exponent + 1);
 
 	ImDrawList* draw_list = ImGui::GetWindowDrawList();
-	double y = pixel_y_begin;
-	for (int i = 0; i < num_gridlines; i++) {
-		draw_list->AddLine(ImVec2(canvas_bb.Min.x, (float)y), ImVec2(canvas_bb.Max.x, (float)y), ImColor(graph_visual.hor_grid_color));
-		y += pixel_y_step;
+
+	//printf("volt_step %.3f  volt_step_exponent %.3f  gridpow1 %.3f  mindivhorpix %.3f\n", volt_step, volt_step_exponent, gridpow1, graph_visual.grid_min_div_horizontal_pix);
+
+	while (i < steps) {
+
+		double val = volt_begin + i * volt_step;
+		i++;
+
+		double pixel_y = round(screen_value_portal.proj_vout(ImVec2d(0., val)).y);
+
+		if (is_divisible(val, gridpow1)) {
+			// is tens grid
+			draw_list->AddLine(ImVec2(canvas_bb.Min.x, (float)pixel_y), ImVec2(canvas_bb.Max.x, (float)pixel_y), ImColor(hor_tens_grid_color));
+
+		} else if (is_divisible(val, gridpow1 / 2)) {
+			// is fives grid
+			draw_list->AddLine(ImVec2(canvas_bb.Min.x, (float)pixel_y), ImVec2(canvas_bb.Max.x, (float)pixel_y), ImColor(hor_fives_grid_color));
+
+		} else if (is_divisible(val, gridpow1 / 4)) {
+			// is 2.5 grid
+			draw_list->AddLine(ImVec2(canvas_bb.Min.x, (float)pixel_y), ImVec2(canvas_bb.Max.x, (float)pixel_y), ImColor(hor_twopointfives_grid_color));
+
+		} else if (is_divisible(val, gridpow1 / 10)) {
+			// is 1 grid
+			draw_list->AddLine(ImVec2(canvas_bb.Min.x, (float)pixel_y), ImVec2(canvas_bb.Max.x, (float)pixel_y), ImColor(hor_ones_grid_color));
+		}
 	}
 }
 
 void GraphWidget::_render_grid_horlegend(const PortalRect& screen_value_portal, GraphVisual& graph_visual, const ImRect& canvas_bb)
 {
+	// TODO: coordinates are NOT pixelperfect. does canvas_bb wrap pixels, or pixel edges?
 	PortalRect& bb_valuespace = graph_visual.portal;
 
 	// using "volt" as a concrete mental shortcut for the value axis. the word "value" has too many meanings.
-	double volt_begin, volt_end, volt_step;
-	int num_gridlines = _calculate_gridlines(bb_valuespace.min.y, bb_valuespace.max.y, canvas_bb.GetHeight(), graph_visual.grid_min_div_horizontal_pix, &volt_begin, &volt_end, &volt_step);
-	if (volt_step == 0 || volt_end <= volt_begin)
+	double volt_begin, volt_end, volt_step, volt_step_exponent;
+	unsigned char grid_mode;
+	_calculate_gridlines_base10(bb_valuespace.min.y, bb_valuespace.max.y, canvas_bb.GetHeight(), graph_visual.grid_min_div_horizontal_pix, &volt_begin, &volt_end, &volt_step, &volt_step_exponent, &grid_mode);
+	if (volt_step == 0)
 		return;
-
-	double pixel_y_begin   = screen_value_portal.proj_vout(ImVec2d(0., volt_begin)).y;
-	double pixels_per_volt = screen_value_portal.proj_vout(ImVec2d(0., 1.)).y - screen_value_portal.proj_vout(ImVec2d(0., 0.)).y;
-	double pixel_y_step    = pixels_per_volt * volt_step;
 
 	this->m_textrend->set_fgcolor(ImColor(graph_visual.hor_grid_text_color));
 	this->m_textrend->set_bgcolor(ImColor(graph_visual.hor_grid_text_bgcolor));
-
-	double y = pixel_y_begin;
-	double value = volt_begin;
 	char txt[20];
 
-	for (int i = 0; i < num_gridlines; i++) {
-		ImFormatString(txt, sizeof(txt), "%.2f", value);
-		this->m_textrend->drawml(txt, canvas_bb.Min.x, (float)y);
-		y += pixel_y_step;
-		value += volt_step;
+	ImVec4 hor_tens_grid_color;
+	ImVec4 hor_fives_grid_color;
+	ImVec4 hor_twopointfives_grid_color;
+	ImVec4 hor_ones_grid_color;
+
+	float col1 = 0.45f;
+	float col2 = 0.55f;
+	float col3 = 0.65f;
+	float col4 = 0.75f;
+	float col5 = 1.00f;
+	ImVec4 color1(col1, col1, col1, 1.0f);
+	ImVec4 color2(col2, col2, col2, 1.0f);
+	ImVec4 color3(col3, col3, col3, 1.0f);
+	ImVec4 color4(col4, col4, col4, 1.0f);
+	ImVec4 color5(col5, col5, col5, 1.0f);
+
+	hor_tens_grid_color = color5;
+	hor_fives_grid_color = color4;
+	hor_twopointfives_grid_color = color1;
+	hor_ones_grid_color = color1;
+
+	// Select color-scheme according to grid mode.
+	if (grid_mode == 1) {
+
+		// Full grid, with tens, fives and ones visible.
+		hor_tens_grid_color = color5;
+		hor_fives_grid_color = color4;
+		hor_twopointfives_grid_color = color2;
+		hor_ones_grid_color = color2;
+
+	} else if (grid_mode == 2) {
+
+		// Grid with tens, fives, twopointfives visible.
+		hor_tens_grid_color = color5;
+		hor_fives_grid_color = color3;
+		hor_twopointfives_grid_color = color2;
+		hor_ones_grid_color = color2;
+
+	} else if (grid_mode == 3) {
+
+		// Grid with tens, fives.
+		hor_tens_grid_color = color5;
+		hor_fives_grid_color = color3;
+		hor_twopointfives_grid_color = color2;
+		hor_ones_grid_color = color2;
 	}
 
-	//this->m_textrend->set_bgcolor(ImColor(graph_visual.hor_grid_text_bgcolor));
+	int i = 0;
+	int steps = round((volt_end - volt_begin) / volt_step);
+	double gridpow1 = pow(10.f, volt_step_exponent + 1);
+
+	ImDrawList* draw_list = ImGui::GetWindowDrawList();
+
+	while (i < steps) {
+
+		double val = volt_begin + i * volt_step;
+		i++;
+
+		double pixel_y = round(screen_value_portal.proj_vout(ImVec2d(0., val)).y);
+
+		if (is_divisible(val, gridpow1)) {
+			// is tens grid
+			this->m_textrend->set_fgcolor(ImColor(hor_tens_grid_color));
+
+		} else if (is_divisible(val, gridpow1 / 2)) {
+			// is fives grid
+			this->m_textrend->set_fgcolor(ImColor(hor_fives_grid_color));
+
+		} else if (is_divisible(val, gridpow1 / 4)) {
+			// is 2.5 grid
+			this->m_textrend->set_fgcolor(ImColor(hor_twopointfives_grid_color));
+
+		} else if (is_divisible(val, gridpow1 / 10)) {
+			// is 1 grid
+			this->m_textrend->set_fgcolor(ImColor(hor_ones_grid_color));
+
+		} else { // should never be here
+			this->m_textrend->set_fgcolor(ImColor(graph_visual.hor_grid_text_color));
+		}
+
+		ImFormatString(txt, sizeof(txt), "%.2f", val);
+		this->m_textrend->drawml(txt, canvas_bb.Min.x, (float)pixel_y);
+	}
+
+	this->m_textrend->set_fgcolor(ImColor(graph_visual.hor_grid_text_color));
+	this->m_textrend->set_bgcolor(ImColor(graph_visual.hor_grid_text_bgcolor));
 	this->m_textrend->drawml(graph_visual.graph_channel->unit.c_str(), canvas_bb.Min.x + 60, canvas_bb.Min.y + 13);
 }
 
@@ -338,7 +541,7 @@ void GraphWidget::_render_grid_verlines(const PortalRect& screen_value_portal, G
 
 	// using "time" as a concrete mental shortcut for the samplenum axis.
 	double time_begin, time_end, time_step;
-	int num_gridlines = _calculate_gridlines(bb_valuespace.min.x, bb_valuespace.max.x, canvas_bb.GetWidth(), graph_visual.grid_min_div_vertical_pix, &time_begin, &time_end, &time_step);
+	int num_gridlines = _calculate_gridlines_base2(bb_valuespace.min.x, bb_valuespace.max.x, canvas_bb.GetWidth(), graph_visual.grid_min_div_vertical_pix, &time_begin, &time_end, &time_step);
 	if (time_step == 0 || time_end <= time_begin)
 		return;
 
@@ -360,7 +563,7 @@ void GraphWidget::_render_grid_verlegend(const PortalRect& screen_value_portal, 
 
 	// using "time" as a concrete mental shortcut for the samplenum axis.
 	double time_begin, time_end, time_step;
-	int num_gridlines = _calculate_gridlines(bb_valuespace.min.x, bb_valuespace.max.x, canvas_bb.GetWidth(), graph_visual.grid_min_div_vertical_pix, &time_begin, &time_end, &time_step);
+	int num_gridlines = _calculate_gridlines_base2(bb_valuespace.min.x, bb_valuespace.max.x, canvas_bb.GetWidth(), graph_visual.grid_min_div_vertical_pix, &time_begin, &time_end, &time_step);
 	if (time_step == 0 || time_end <= time_begin)
 		return;
 
