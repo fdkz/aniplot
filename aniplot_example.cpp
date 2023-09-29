@@ -205,6 +205,7 @@ int main(int, char**)
 	init_graphs();
 
 	bool window_hidden = false;
+	int frame_num = -1;
 
 	// Main loop
 	bool done = false;
@@ -238,16 +239,25 @@ int main(int, char**)
 		ImGui::NewFrame();
 
 		if (!window_hidden) {
+			frame_num++;
 			append_samples();
 
 			ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
-			ImGui::SetNextWindowSize(ImVec2(INITIAL_SCREEN_WIDTH - 40, INITIAL_SCREEN_HEIGHT - 40), ImGuiCond_FirstUseEver);
+			if (frame_num == 0) {
+				// Don't want to use the ImGuiCond_FirstUseEver flag because that works if no imgui.ini file exists yet.
+				ImGui::SetNextWindowSize(ImVec2(INITIAL_SCREEN_WIDTH - 20, INITIAL_SCREEN_HEIGHT - 20));
+			}
 			ImGui::Begin("usualwindow", NULL, ImGuiWindowFlags_NoScrollWithMouse);
 
+			ImVec2 size_avail = ImGui::GetContentRegionAvail();
+			ImGuiStyle style = ImGui::GetStyle();
+
 			float graph_w = 0; // 0 to fill available space
-			float graph_h = 200;
-			graph_widget1.DoGraph("robota-1", ImVec2(graph_w, graph_h));
-			graph_widget2.DoGraph("robota-2", ImVec2(graph_w, graph_h));
+			float graph_h = (size_avail.y - style.ItemSpacing.y - style.FramePadding.y * 2) / 2;
+			if (graph_h > 0) {
+				graph_widget1.DoGraph("robota-1", ImVec2(graph_w, graph_h));
+				graph_widget2.DoGraph("robota-2", ImVec2(graph_w, graph_h));
+			}
 
 			ImGui::End();
 
