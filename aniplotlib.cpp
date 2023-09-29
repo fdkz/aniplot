@@ -128,9 +128,9 @@ void GraphWidget::DoGraph(const char* label, ImVec2 size)
 
 	//LOG_IMVEC2(visualmousecoord);
 
-	bool hovered = ImGui::ItemHoverable(bb, id);
+	bool hovered = ImGui::IsItemHovered();
 
-	const bool tab_focus_requested = (ImGui::GetItemStatusFlags() & ImGuiItemStatusFlags_FocusedByTabbing) || g.NavActivateInputId == id;
+	const bool tab_focus_requested = ImGui::GetItemStatusFlags() & ImGuiItemStatusFlags_FocusedByTabbing;
 
 	if ((tab_focus_requested || (hovered && (g.IO.MouseClicked[0] | g.IO.MouseDoubleClicked[0])))) {
 		ImGui::SetActiveID(id, window);

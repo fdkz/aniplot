@@ -1,4 +1,5 @@
 #define IMGUI_IMPLEMENTATION
+#define IMGUI_DEFINE_MATH_OPERATORS
 
 #include "imgui.h"
 
@@ -8,5 +9,5 @@
 #include "imgui_tables.cpp"
 #include "imgui_widgets.cpp"
 
-#include "backends/imgui_impl_sdl.cpp"
+#include "backends/imgui_impl_sdl2.cpp"
 #include "backends/imgui_impl_opengl3.cpp"
